@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Working data & generated artifacts
+work/
+figures/
+data/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.langgraph_api/
+
+# UI
+deep-agents-ui/
+
+# claude
+.claude/
