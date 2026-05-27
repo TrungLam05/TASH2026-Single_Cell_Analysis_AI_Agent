@@ -3,6 +3,9 @@
 Runs the full standard pipeline on the built-in pbmc3k dataset and prints each tool's
 summary. Verifies that the tools and disk-backed session state work end-to-end.
 
+Since this bypasses the LangGraph runtime, ``current_thread_id()`` returns ``"default"``
+and output lands under ``work/default/`` (adata + figures).
+
     python scripts/smoke_test.py
 """
 

@@ -22,3 +22,7 @@ deep-agents-ui/
 
 # claude
 .claude/
+CLAUDE.md
+
+#prompts 
+test_prompts.md

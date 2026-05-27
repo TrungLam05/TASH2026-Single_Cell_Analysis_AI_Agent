@@ -222,8 +222,10 @@ def find_markers(method: str = "wilcoxon", n_genes: int = 10) -> str:
 def plot_umap(color: str = "leiden") -> str:
     """Save a UMAP scatter plot colored by `color`.
 
-    `color` can be 'leiden' (clusters) or a gene name. Run after cluster. Returns the path
-    to the saved PNG.
+    `color` can be 'leiden' (clusters), any column in adata.obs, or a gene name. Run after
+    cluster. Returns the path to the saved PNG, or a friendly error string if `color` is
+    not available (e.g. a gene that was filtered out by HVG selection and absent from
+    adata.raw).
     """
     with STATE_LOCK:
         if not adata_exists():
@@ -231,6 +233,19 @@ def plot_umap(color: str = "leiden") -> str:
         adata = load_adata()
         if "X_umap" not in adata.obsm:
             return "No UMAP embedding found. Run cluster before plot_umap."
+
+        # Validate `color` up front so a missing gene returns a recoverable string instead
+        # of raising KeyError from sc.pl.umap (which crashes the LangGraph run).
+        in_obs = color in adata.obs.columns
+        in_var = color in adata.var_names
+        in_raw = adata.raw is not None and color in adata.raw.var_names
+        if not (in_obs or in_var or in_raw):
+            return (
+                f"'{color}' is not a column in adata.obs and not a gene in adata.var_names "
+                f"or adata.raw.var_names; cannot plot. Likely it was filtered out by "
+                f"select_hvg and is not in the raw snapshot either. Pick a different gene "
+                f"or use 'leiden'."
+            )
 
         fig = sc.pl.umap(adata, color=color, show=False, return_fig=True)
         out = plot_path(f"umap_{color}.png")

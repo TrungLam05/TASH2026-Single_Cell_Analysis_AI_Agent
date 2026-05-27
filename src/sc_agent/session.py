@@ -5,6 +5,11 @@ Each curated tool runs as a separate call on the LangGraph server, so the workin
 ``adata.h5ad`` under the working directory; every tool loads it, mutates it, and saves it
 back. Plots are written alongside it.
 
+State is scoped per chat thread: ``work/<thread_id>/`` and ``reports/<thread_id>/`` are
+isolated from other threads, so two concurrent chats analysing the same dataset do not
+collide. When no LangGraph runtime is present (CLI before the first invoke, smoke test)
+the thread id falls back to ``"default"``.
+
 The LangGraph server runs tool calls concurrently (``asyncio.gather``, each sync tool on its
 own thread), so all access to the single h5ad file is serialized with a process-wide lock and
 writes are atomic (temp file + ``os.replace``). Without this, two overlapping tool calls hit
@@ -14,6 +19,7 @@ HDF5's "unable to truncate a file which is already open" error.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -28,9 +34,44 @@ STATE_LOCK = threading.RLock()
 # Project root = two levels up from this file (src/sc_agent/session.py -> project root).
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+_THREAD_ID_SAFE = re.compile(r"[^A-Za-z0-9._-]")
 
-def work_dir() -> Path:
-    """Return (and create) the working directory for adata + plots."""
+
+def _sanitize_thread_id(raw: str) -> str:
+    """Make a thread id safe to use as a directory name.
+
+    Thread ids reaching us are typically uuid hex (already safe), but external clients can
+    set any string. Strip path separators and other shell-hostile characters, cap length.
+    """
+    cleaned = _THREAD_ID_SAFE.sub("_", raw).strip("._") or "default"
+    return cleaned[:64]
+
+
+def current_thread_id() -> str:
+    """Return the current chat thread's id, or ``"default"`` outside a LangGraph run.
+
+    The thread id is read from ``langgraph.config.get_config()["configurable"]["thread_id"]``.
+    Falls back to ``"default"`` when:
+      * not running inside a LangGraph invocation (e.g. ``scripts/smoke_test.py`` calls tools
+        directly), or
+      * the runtime config doesn't carry a thread id.
+    """
+    try:
+        from langgraph.config import get_config
+    except ImportError:
+        return "default"
+    try:
+        cfg = get_config()
+    except RuntimeError:
+        return "default"
+    tid = (cfg or {}).get("configurable", {}).get("thread_id")
+    if not tid:
+        return "default"
+    return _sanitize_thread_id(str(tid))
+
+
+def work_base_dir() -> Path:
+    """Return (and create) the *base* directory that holds all per-thread work dirs."""
     configured = os.getenv("SC_AGENT_WORK_DIR", "work")
     path = Path(configured)
     if not path.is_absolute():
@@ -39,19 +80,33 @@ def work_dir() -> Path:
     return path
 
 
-def reports_dir() -> Path:
-    """Return (and create) the directory the agent writes its reports/notes into.
+def reports_base_dir() -> Path:
+    """Return (and create) the *base* directory that holds all per-thread reports dirs.
 
-    This is the real-disk root for the agent's built-in filesystem tools, so the technical
-    reports it produces land here as files the researcher can open.
+    Used as ``root_dir`` for the agent's :class:`FilesystemBackend`; the per-call ``cwd`` is
+    one level deeper (the current thread's subdir).
     """
     path = _PROJECT_ROOT / "reports"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
+def work_dir() -> Path:
+    """Return (and create) the per-thread working directory for adata + plots."""
+    path = work_base_dir() / current_thread_id()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def reports_dir() -> Path:
+    """Return (and create) the per-thread directory the agent writes its reports into."""
+    path = reports_base_dir() / current_thread_id()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def adata_path() -> Path:
-    """Path to the persisted AnnData file."""
+    """Path to the persisted AnnData file for the current thread."""
     return work_dir() / "adata.h5ad"
 
 
@@ -88,5 +143,5 @@ def save_adata(adata: ad.AnnData) -> None:
 
 
 def plot_path(name: str) -> Path:
-    """Resolve a path for a generated plot inside the working directory."""
+    """Resolve a path for a generated plot inside the current thread's working directory."""
     return work_dir() / name
